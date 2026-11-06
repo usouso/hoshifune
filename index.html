@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#060a24">
+<title>ほしふね</title>
+<style>
+  html, body { margin:0; padding:0; background:#060a24; height:100%; overflow:hidden;
+    font-family:"Hiragino Maru Gothic ProN","Hiragino Sans","Noto Sans JP",sans-serif; }
+  #wrap { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  canvas { display:block; touch-action:none; border-radius:8px;
+    box-shadow:0 0 40px rgba(30,60,180,.45); }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv" width="960" height="720"></canvas></div>
+<script>
+(function(){
+"use strict";
+var cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+var W = 960, H = 720, BOAT_Y = Math.floor(H * 0.68);
+
+function fit(){
+  var s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  cv.style.width = (W * s) + 'px'; cv.style.height = (H * s) + 'px';
+}
+window.addEventListener('resize', fit); fit();
+
+/* World coordinates:
+   absY = position along the river. The boat sits at absY == scrollY.
+   screenY(absY) = BOAT_Y - (absY - scrollY). Objects ahead have absY > scrollY. */
+function screenY(absY){ return BOAT_Y - (absY - scrollY); }
+function riverCenter(absY){ return W/2 + Math.sin(absY*0.0016)*150 + Math.sin(absY*0.00053+1.7)*90; }
+function riverWidth(absY){ return 430 + Math.sin(absY*0.0009+0.6)*70 + Math.sin(absY*0.0021)*30; }
+function hash(n){ var x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); }
+
+/* ---------- tiny synth sounds ---------- */
+var AC = null;
+function audio(){ if(!AC){ try{ AC = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } return AC; }
+function tone(f0, f1, dur, type, vol, delay){
+  var ac = audio(); if(!ac) return;
+  var t = ac.currentTime + (delay||0);
+  var o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(f1,1), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function sndStar(){ tone(880, 1320, 0.12, 'sine', 0.16, 0); tone(1320, 1760, 0.16, 'sine', 0.12, 0.07); }
+function sndHit(){ tone(160, 60, 0.25, 'triangle', 0.3, 0); }
+function sndOver(){ tone(520, 130, 0.7, 'sine', 0.2, 0); }
+
+/* ---------- game state ---------- */
+var state = 'title'; // title | play | over
+var boat, stars, rocks, pads, parts, floats, scrollY, speed, starCount, hp, dist, timePlay, nextSpawn, shake, best = 0;
+var keys = {}, touchX = null;
+
+function spawnRow(absY){
+  var c = riverCenter(absY), w = riverWidth(absY);
+  var safeX = c + Math.sin(absY * 0.0011) * (w/2 - 140); // guaranteed passable corridor
+  if (Math.random() < 0.85){
+    var sx = safeX + (Math.random()*160 - 80);
+    sx = Math.max(c - w/2 + 40, Math.min(c + w/2 - 40, sx));
+    stars.push({ x: sx, absY: absY, ph: Math.random()*6.28 });
+    if (Math.random() < 0.35) stars.push({ x: sx + (Math.random()*70-35), absY: absY + 90, ph: Math.random()*6.28 });
+  }
+  var n = 1 + (Math.random() < 0.55 ? 1 : 0);
+  for (var i = 0; i < n; i++){
+    for (var tries = 0; tries < 8; tries++){
+      var rx = c + (Math.random()*2 - 1) * (w/2 - 55);
+      if (Math.abs(rx - safeX) > 130){
+        rocks.push({ x: rx, absY: absY + Math.random()*120, r: 24 + Math.random()*16, seed: Math.random()*10 });
+        break;
+      }
+    }
+  }
+}
+
+function reset(){
+  boat = { x: W/2, vx: 0, inv: 0, tilt: 0 };
+  stars = []; rocks = []; pads = []; parts = []; floats = [];
+  scrollY = 0; speed = 2.3; starCount = 0; hp = 3; dist = 0; timePlay = 0; shake = 0;
+  nextSpawn = 500;
+  for (var a = 400; a < 2200; a += 250) spawnRow(a);
+  nextSpawn = 2200;
+  for (var j = 0; j < 10; j++){
+    var ay = Math.random() * 2000;
+    pads.push({ x: riverCenter(ay) + (Math.random()<0.5?-1:1) * (riverWidth(ay)/2 - 42), absY: ay, r: 12 + Math.random()*10 });
+  }
+}
+
+function startGame(){ audio(); reset(); state = 'play'; }
+function gameOver(){
+  state = 'over'; sndOver();
+  var score = starCount * 100 + Math.floor(dist);
+  if (score > best) best = score;
+}
+
+/* ---------- input ---------- */
+window.addEventListener('keydown', function(e){
+  keys[e.key] = true;
+  if ((e.key === ' ' || e.key === 'Enter') && state !== 'play') startGame();
+  if (e.key.indexOf('Arrow') === 0) e.preventDefault();
+});
+window.addEventListener('keyup', function(e){ keys[e.key] = false; });
+function toGameX(clientX){
+  var r = cv.getBoundingClientRect();
+  return (clientX - r.left) / r.width * W;
+}
+cv.addEventListener('pointerdown', function(e){
+  if (state !== 'play'){ startGame(); return; }
+  touchX = toGameX(e.clientX);
+});
+cv.addEventListener('pointermove', function(e){ if (touchX !== null) touchX = toGameX(e.clientX); });
+window.addEventListener('pointerup', function(){ touchX = null; });
+
+/* ---------- update ---------- */
+function update(){
+  if (state !== 'play') return;
+  timePlay += 1/60;
+  speed = Math.min(2.3 + timePlay * 0.022, 5.2);
+  scrollY += speed; dist += speed * 0.02;
+
+  var acc = 0.9, maxv = 7;
+  if (keys['ArrowLeft'] || keys['a'] || keys['A']) boat.vx -= acc;
+  if (keys['ArrowRight'] || keys['d'] || keys['D']) boat.vx += acc;
+  if (touchX !== null){
+    var d = touchX - boat.x;
+    boat.vx += Math.max(-acc*1.4, Math.min(acc*1.4, d * 0.012));
+  }
+  boat.vx *= 0.86;
+  boat.vx = Math.max(-maxv, Math.min(maxv, boat.vx));
+  boat.x += boat.vx;
+  boat.tilt = boat.vx * 0.045;
+
+  var c = riverCenter(scrollY), w = riverWidth(scrollY), margin = 44;
+  if (boat.x < c - w/2 + margin) { boat.x = c - w/2 + margin; boat.vx = Math.abs(boat.vx)*0.3; }
+  if (boat.x > c + w/2 - margin) { boat.x = c + w/2 - margin; boat.vx = -Math.abs(boat.vx)*0.3; }
+  if (boat.inv > 0) boat.inv -= 1/60;
+  if (shake > 0) shake *= 0.88;
+
+  while (nextSpawn < scrollY + H + 500){ spawnRow(nextSpawn); nextSpawn += 240 + Math.random()*90; }
+
+  var i, s, sy;
+  for (i = stars.length - 1; i >= 0; i--){
+    s = stars[i]; sy = screenY(s.absY);
+    if (sy > H + 60){ stars.splice(i,1); continue; }
+    if (Math.abs(s.x - boat.x) < 34 && Math.abs(sy - BOAT_Y) < 40){
+      starCount++; sndStar();
+      floats.push({ x: s.x, y: sy - 20, t: 0, txt: '+1' });
+      for (var p = 0; p < 10; p++) parts.push({ x: s.x, y: sy, vx: (Math.random()*2-1)*2.2, vy: (Math.random()*2-1)*2.2, t: 0, col: '#ffd94d' });
+      stars.splice(i,1);
+    }
+  }
+  for (i = rocks.length - 1; i >= 0; i--){
+    var r = rocks[i]; sy = screenY(r.absY);
+    if (sy > H + 80){ rocks.splice(i,1); continue; }
+    if (boat.inv <= 0 && Math.abs(r.x - boat.x) < r.r + 22 && Math.abs(sy - BOAT_Y) < r.r + 26){
+      hp--; sndHit(); shake = 9; boat.inv = 1.4;
+      for (var q = 0; q < 14; q++) parts.push({ x: boat.x, y: BOAT_Y, vx: (Math.random()*2-1)*3.4, vy: (Math.random()*2-1)*3.4, t: 0, col: '#bfe3ff' });
+      rocks.splice(i,1);
+      if (hp <= 0){ gameOver(); return; }
+    }
+  }
+  for (i = pads.length - 1; i >= 0; i--){
+    if (screenY(pads[i].absY) > H + 40){
+      pads[i].absY += H + 500 + Math.random()*300;
+      pads[i].x = riverCenter(pads[i].absY) + (Math.random()<0.5?-1:1) * (riverWidth(pads[i].absY)/2 - 42);
+    }
+  }
+  for (i = parts.length - 1; i >= 0; i--){ var pt = parts[i]; pt.t += 1/60; pt.x += pt.vx; pt.y += pt.vy + speed*0.4; if (pt.t > 0.55) parts.splice(i,1); }
+  for (i = floats.length - 1; i >= 0; i--){ var f = floats[i]; f.t += 1/60; f.y -= 0.7; if (f.t > 0.9) floats.splice(i,1); }
+}
+
+/* ---------- draw helpers ---------- */
+function poly(pts, fill){
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+  if (fill){ ctx.fillStyle = fill; ctx.fill(); }
+}
+function drawRock(x, y, r, seed){
+  var pts = [], i, a, rr;
+  for (i = 0; i < 7; i++){
+    a = i / 7 * Math.PI * 2 + seed;
+    rr = r * (0.78 + 0.3 * Math.abs(Math.sin(seed * 3 + i * 1.7)));
+    pts.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.82]);
+  }
+  poly(pts, '#5b4a8a');
+  var pts2 = pts.map(function(p){ return [x + (p[0]-x)*0.62, y + (p[1]-y)*0.55 - r*0.14]; });
+  poly(pts2, '#6f5ba6');
+  ctx.fillStyle = 'rgba(140,220,255,0.5)';
+  ctx.beginPath(); ctx.ellipse(x, y + r*0.78, r*0.9, r*0.25, 0, 0, Math.PI*2); ctx.fill();
+}
+function drawStarShape(x, y, r, glow){
+  ctx.save();
+  if (glow){ ctx.shadowColor = '#ffdf6b'; ctx.shadowBlur = 22; }
+  ctx.beginPath();
+  for (var i = 0; i < 10; i++){
+    var a = -Math.PI/2 + i * Math.PI/5, rr = (i % 2 === 0) ? r : r * 0.48;
+    var px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.fillStyle = '#ffd94d'; ctx.fill();
+  ctx.shadowBlur = 0; ctx.strokeStyle = '#ffedb0'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.restore();
+}
+function drawBoat(x, y, tilt, inv){
+  ctx.save(); ctx.translate(x, y); ctx.rotate(tilt);
+  if (inv > 0 && Math.floor(inv * 12) % 2 === 0) ctx.globalAlpha = 0.35;
+  ctx.strokeStyle = 'rgba(160,220,255,0.35)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(0, 26, 30, 9, 0, 0, Math.PI*2); ctx.stroke();
+  poly([[-6,-38],[30,16],[8,30],[-8,8]], '#e8dcc0');
+  poly([[-6,-38],[-30,16],[-8,30],[-8,8]], '#d9c9a6');
+  poly([[-8,8],[8,30],[-8,30]], '#cbbd97');
+  ctx.strokeStyle = 'rgba(90,70,40,0.35)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-6,-38); ctx.lineTo(-8,30); ctx.stroke();
+  ctx.strokeStyle = '#3a6fd8'; ctx.lineWidth = 2.4; ctx.beginPath();
+  for (var i = 0; i < 4; i++){ var zx = -22 + i*11; ctx.lineTo(zx, 20 + (i%2? -4: 3)); }
+  ctx.stroke();
+  ctx.strokeStyle = '#8a6b46'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(-2, 6); ctx.lineTo(-2, -22); ctx.stroke();
+  var wav = Math.sin(performance.now()*0.012) * 2;
+  poly([[-2,-22],[14 + wav,-18],[-2,-13]], '#e33e3e');
+  ctx.restore();
+}
+
+/* ---------- draw ---------- */
+function draw(){
+  var ox = shake ? (Math.random()*2-1) * shake : 0, oy = shake ? (Math.random()*2-1) * shake : 0;
+  ctx.save(); ctx.translate(ox, oy);
+  var g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#0a2a6e'); g.addColorStop(1, '#071c4e');
+  ctx.fillStyle = g; ctx.fillRect(-12, -12, W + 24, H + 24);
+  // ripple pattern
+  ctx.fillStyle = 'rgba(90,170,255,0.13)';
+  var step = 46, off = scrollY % step, xx, yy;
+  for (yy = -step; yy < H + step; yy += step){
+    for (xx = ((yy/step) % 2) * step/2; xx < W; xx += step){
+      ctx.beginPath(); ctx.ellipse(xx + 10, yy + off, 9, 3.4, 0, 0, Math.PI*2); ctx.fill();
+    }
+  }
+  // banks
+  var rows = [], sy, absY, i;
+  for (sy = -40; sy <= H + 40; sy += 40){
+    absY = scrollY + BOAT_Y - sy;
+    rows.push({ sy: sy, c: riverCenter(absY), w: riverWidth(absY) });
+  }
+  ctx.beginPath(); ctx.moveTo(-12, -12);
+  for (i = 0; i < rows.length; i++) ctx.lineTo(rows[i].c - rows[i].w/2, rows[i].sy);
+  ctx.lineTo(-12, H + 12); ctx.closePath(); ctx.fillStyle = '#173d33'; ctx.fill();
+  ctx.beginPath(); ctx.moveTo(W + 12, -12);
+  for (i = rows.length - 1; i >= 0; i--) ctx.lineTo(rows[i].c + rows[i].w/2, rows[i].sy);
+  ctx.lineTo(W + 12, H + 12); ctx.closePath(); ctx.fillStyle = '#173d33'; ctx.fill();
+  ctx.strokeStyle = 'rgba(150,225,255,0.5)'; ctx.lineWidth = 3;
+  ctx.beginPath(); for (i = 0; i < rows.length; i++){ if (i===0) ctx.moveTo(rows[i].c - rows[i].w/2, rows[i].sy); else ctx.lineTo(rows[i].c - rows[i].w/2, rows[i].sy); } ctx.stroke();
+  ctx.beginPath(); for (i = 0; i < rows.length; i++){ if (i===0) ctx.moveTo(rows[i].c + rows[i].w/2, rows[i].sy); else ctx.lineTo(rows[i].c + rows[i].w/2, rows[i].sy); } ctx.stroke();
+  // bank decorations by 90px world band
+  var band0 = Math.floor((scrollY - 200) / 90), band1 = Math.floor((scrollY + H + 200) / 90);
+  for (var band = band0; band <= band1; band++){
+    var by = screenY(band * 90);
+    var bc = riverCenter(band * 90), bw = riverWidth(band * 90);
+    var h1 = hash(band), h2 = hash(band + 5000);
+    if (h1 < 0.75) drawRock(bc - bw/2 - 26 - h2*30, by, 15 + h2*13, band * 1.3);
+    if (h2 < 0.75) drawRock(bc + bw/2 + 26 + h1*30, by + 30, 14 + h1*12, band * 2.1);
+    ctx.fillStyle = '#e77fb0';
+    if (h1 < 0.6){ for (var f = 0; f < 4; f++){ ctx.beginPath(); ctx.arc(bc - bw/2 - 14 - ((h2*40 + f*9) % 46), by + f*8 - 12, 2.6, 0, Math.PI*2); ctx.fill(); } }
+    if (h2 < 0.6){ for (var f2 = 0; f2 < 4; f2++){ ctx.beginPath(); ctx.arc(bc + bw/2 + 14 + ((h1*40 + f2*9) % 46), by + f2*8, 2.6, 0, Math.PI*2); ctx.fill(); } }
+  }
+  // lily pads
+  ctx.fillStyle = 'rgba(60,160,90,0.75)';
+  for (i = 0; i < pads.length; i++){
+    var py = screenY(pads[i].absY);
+    if (py > -30 && py < H + 30){ ctx.beginPath(); ctx.ellipse(pads[i].x, py, pads[i].r, pads[i].r*0.6, 0, 0, Math.PI*2); ctx.fill(); }
+  }
+  // stars
+  for (i = 0; i < stars.length; i++){
+    var st = stars[i], sty = screenY(st.absY);
+    if (sty < -40 || sty > H + 40) continue;
+    var pulse = 1 + Math.sin(performance.now()*0.005 + st.ph) * 0.12;
+    drawStarShape(st.x, sty, 15 * pulse, true);
+  }
+  // rocks in river
+  for (i = 0; i < rocks.length; i++){
+    var ry = screenY(rocks[i].absY);
+    if (ry < -60 || ry > H + 60) continue;
+    drawRock(rocks[i].x, ry, rocks[i].r, rocks[i].seed);
+  }
+  // particles
+  for (i = 0; i < parts.length; i++){
+    var pp = parts[i]; ctx.globalAlpha = 1 - pp.t / 0.55; ctx.fillStyle = pp.col;
+    ctx.beginPath(); ctx.arc(pp.x, pp.y, 3, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  if (state !== 'title') drawBoat(boat.x, BOAT_Y, boat.tilt, boat.inv);
+  ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'center';
+  for (i = 0; i < floats.length; i++){
+    var fl = floats[i]; ctx.globalAlpha = 1 - fl.t / 0.9;
+    ctx.fillStyle = '#ffe066'; ctx.fillText(fl.txt, fl.x, fl.y);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  /* HUD */
+  ctx.save();
+  var hx = 16, hy = 14, hw = 176, hh = 42, rr2 = 8;
+  ctx.beginPath();
+  ctx.moveTo(hx + rr2, hy); ctx.arcTo(hx + hw, hy, hx + hw, hy + hh, rr2); ctx.arcTo(hx + hw, hy + hh, hx, hy + hh, rr2);
+  ctx.arcTo(hx, hy + hh, hx, hy, rr2); ctx.arcTo(hx, hy, hx + hw, hy, rr2); ctx.closePath();
+  ctx.fillStyle = '#123a9e'; ctx.fill(); ctx.strokeStyle = '#f2c230'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('Stars: ' + starCount, hx + 14, hy + 29);
+  drawStarShape(hx + hw - 22, hy + 21, 11, false);
+  ctx.textAlign = 'right'; ctx.font = '24px sans-serif';
+  for (i = 0; i < 3; i++){
+    ctx.globalAlpha = i < hp ? 1 : 0.25;
+    ctx.fillStyle = '#ff5b7f'; ctx.fillText('♥', W - 18 - i * 32, 40);
+  }
+  ctx.globalAlpha = 1;
+  if (state === 'play'){
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '16px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(Math.floor(dist) + ' m', W - 16, 66);
+  }
+  ctx.restore();
+
+  if (state === 'title'){
+    ctx.fillStyle = 'rgba(4,8,32,0.55)'; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe98a';
+    ctx.font = 'bold 74px sans-serif'; ctx.fillText('ほしふね', W/2, 250);
+    ctx.fillStyle = '#dfe9ff'; ctx.font = '22px sans-serif';
+    ctx.fillText('夜の川を紙の船で下りながら、落ちた星を拾おう', W/2, 320);
+    ctx.fillText('岩に3回ぶつかるとゲームオーバー', W/2, 356);
+    drawStarShape(W/2 - 150, 238, 16, true); drawStarShape(W/2 + 150, 238, 16, true);
+    ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 28px sans-serif';
+    ctx.fillText('クリック / タップ / Enter でスタート', W/2, 450);
+    ctx.fillStyle = '#aebfff'; ctx.font = '18px sans-serif';
+    ctx.fillText('操作： ← → キー、A / D キー、またはドラッグ', W/2, 492);
+  }
+  if (state === 'over'){
+    ctx.fillStyle = 'rgba(4,8,32,0.6)'; ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+    ctx.font = 'bold 46px sans-serif'; ctx.fillText('ゲームオーバー', W/2, 260);
+    ctx.font = '26px sans-serif'; ctx.fillStyle = '#ffe98a';
+    ctx.fillText('星 ' + starCount + ' 個　・　' + Math.floor(dist) + ' m 進んだ', W/2, 330);
+    ctx.fillText('スコア ' + (starCount * 100 + Math.floor(dist)), W/2, 372);
+    ctx.fillStyle = '#aebfff'; ctx.font = '20px sans-serif';
+    ctx.fillText('ベストスコア ' + best, W/2, 410);
+    ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 26px sans-serif';
+    ctx.fillText('クリック / タップ / Enter でもう一度', W/2, 480);
+  }
+}
+
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+/* 動作確認用フック（プレイには影響しない） */
+window.__hoshifune = {
+  info: function(){
+    var ns = null, nr = null, i, sy;
+    for (i = 0; i < stars.length; i++){ sy = screenY(stars[i].absY); if (sy > 0 && sy < BOAT_Y + 60 && (ns === null || sy > ns.sy)) ns = { x: Math.round(stars[i].x), sy: Math.round(sy) }; }
+    for (i = 0; i < rocks.length; i++){ sy = screenY(rocks[i].absY); if (sy > 0 && sy < BOAT_Y + 60 && (nr === null || sy > nr.sy)) nr = { x: Math.round(rocks[i].x), sy: Math.round(sy) }; }
+    return { state: state, stars: starCount, hp: hp, dist: Math.floor(dist), boatX: Math.round(boat.x), nextStar: ns, nextRock: nr };
+  }
+};
+reset();
+loop();
+})();
+</script>
+</body>
+</html>
