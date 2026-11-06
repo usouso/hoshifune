@@ -50,6 +50,17 @@ function tone(f0, f1, dur, type, vol, delay){
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
 }
+/* ---------- image assets (generated) ---------- */
+function loadImg(src){ var im = new Image(); im.src = src; return im; }
+var IMG = {
+  boat: loadImg('assets/boat.png'),
+  rock: loadImg('assets/rock.png'),
+  star: loadImg('assets/star.png'),
+  pad: loadImg('assets/pad.png'),
+  water: loadImg('assets/water.png')
+};
+function ready(im){ return im && im.complete && im.naturalWidth > 0; }
+
 function sndStar(){ tone(880, 1320, 0.12, 'sine', 0.16, 0); tone(1320, 1760, 0.16, 'sine', 0.12, 0.07); }
 function sndHit(){ tone(160, 60, 0.25, 'triangle', 0.3, 0); }
 function sndOver(){ tone(520, 130, 0.7, 'sine', 0.2, 0); }
@@ -184,17 +195,18 @@ function poly(pts, fill){
   if (fill){ ctx.fillStyle = fill; ctx.fill(); }
 }
 function drawRock(x, y, r, seed){
-  var pts = [], i, a, rr;
-  for (i = 0; i < 7; i++){
-    a = i / 7 * Math.PI * 2 + seed;
-    rr = r * (0.78 + 0.3 * Math.abs(Math.sin(seed * 3 + i * 1.7)));
-    pts.push([x + Math.cos(a) * rr, y + Math.sin(a) * rr * 0.82]);
+  var s = r * 3.2;
+  ctx.fillStyle = 'rgba(140,220,255,0.4)';
+  ctx.beginPath(); ctx.ellipse(x, y + s*0.36, s*0.46, s*0.13, 0, 0, Math.PI*2); ctx.fill();
+  if (ready(IMG.rock)){
+    ctx.save(); ctx.translate(x, y);
+    if (Math.sin(seed * 7.3) > 0) ctx.scale(-1, 1);
+    ctx.drawImage(IMG.rock, -s/2, -s/2, s, s * 0.95);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#5b4a8a';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
   }
-  poly(pts, '#5b4a8a');
-  var pts2 = pts.map(function(p){ return [x + (p[0]-x)*0.62, y + (p[1]-y)*0.55 - r*0.14]; });
-  poly(pts2, '#6f5ba6');
-  ctx.fillStyle = 'rgba(140,220,255,0.5)';
-  ctx.beginPath(); ctx.ellipse(x, y + r*0.78, r*0.9, r*0.25, 0, 0, Math.PI*2); ctx.fill();
 }
 function drawStarShape(x, y, r, glow){
   ctx.save();
@@ -210,22 +222,22 @@ function drawStarShape(x, y, r, glow){
   ctx.restore();
 }
 function drawBoat(x, y, tilt, inv){
-  ctx.save(); ctx.translate(x, y); ctx.rotate(tilt);
+  ctx.save(); ctx.translate(x, y);
   if (inv > 0 && Math.floor(inv * 12) % 2 === 0) ctx.globalAlpha = 0.35;
-  ctx.strokeStyle = 'rgba(160,220,255,0.35)'; ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.ellipse(0, 26, 30, 9, 0, 0, Math.PI*2); ctx.stroke();
-  poly([[-6,-38],[30,16],[8,30],[-8,8]], '#e8dcc0');
-  poly([[-6,-38],[-30,16],[-8,30],[-8,8]], '#d9c9a6');
-  poly([[-8,8],[8,30],[-8,30]], '#cbbd97');
-  ctx.strokeStyle = 'rgba(90,70,40,0.35)'; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(-6,-38); ctx.lineTo(-8,30); ctx.stroke();
-  ctx.strokeStyle = '#3a6fd8'; ctx.lineWidth = 2.4; ctx.beginPath();
-  for (var i = 0; i < 4; i++){ var zx = -22 + i*11; ctx.lineTo(zx, 20 + (i%2? -4: 3)); }
-  ctx.stroke();
-  ctx.strokeStyle = '#8a6b46'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(-2, 6); ctx.lineTo(-2, -22); ctx.stroke();
-  var wav = Math.sin(performance.now()*0.012) * 2;
-  poly([[-2,-22],[14 + wav,-18],[-2,-13]], '#e33e3e');
+  // wake rings
+  var wob = Math.sin(performance.now()*0.006) * 2;
+  ctx.strokeStyle = 'rgba(170,225,255,0.4)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.ellipse(0, 12, 36 + wob, 11, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(0, -32, 24 + wob, 7, 0, 0, Math.PI*2); ctx.stroke();
+  ctx.rotate(tilt);
+  var bob = Math.sin(performance.now()*0.003) * 1.6;
+  if (ready(IMG.boat)){
+    var bw = 98, bh = bw * 1.12;
+    ctx.drawImage(IMG.boat, -bw/2, -bh/2 + bob, bw, bh);
+  } else {
+    poly([[-6,-38],[30,16],[8,30],[-8,8]], '#e8dcc0');
+    poly([[-6,-38],[-30,16],[-8,30],[-8,8]], '#d9c9a6');
+  }
   ctx.restore();
 }
 
@@ -236,13 +248,14 @@ function draw(){
   var g = ctx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, '#0a2a6e'); g.addColorStop(1, '#071c4e');
   ctx.fillStyle = g; ctx.fillRect(-12, -12, W + 24, H + 24);
-  // ripple pattern
-  ctx.fillStyle = 'rgba(90,170,255,0.13)';
-  var step = 46, off = scrollY % step, xx, yy;
-  for (yy = -step; yy < H + step; yy += step){
-    for (xx = ((yy/step) % 2) * step/2; xx < W; xx += step){
-      ctx.beginPath(); ctx.ellipse(xx + 10, yy + off, 9, 3.4, 0, 0, Math.PI*2); ctx.fill();
-    }
+  // water texture (generated image, tiled)
+  if (ready(IMG.water)){
+    var tw = 288, oy = -(scrollY % tw), xx, yy;
+    ctx.globalAlpha = 0.48;
+    for (yy = oy - tw; yy < H + tw; yy += tw)
+      for (xx = -12; xx < W + 12; xx += tw)
+        ctx.drawImage(IMG.water, xx, yy, tw, tw);
+    ctx.globalAlpha = 1;
   }
   // banks
   var rows = [], sy, absY, i;
@@ -265,24 +278,42 @@ function draw(){
     var by = screenY(band * 90);
     var bc = riverCenter(band * 90), bw = riverWidth(band * 90);
     var h1 = hash(band), h2 = hash(band + 5000);
-    if (h1 < 0.75) drawRock(bc - bw/2 - 26 - h2*30, by, 15 + h2*13, band * 1.3);
-    if (h2 < 0.75) drawRock(bc + bw/2 + 26 + h1*30, by + 30, 14 + h1*12, band * 2.1);
+    if (h1 < 0.75) drawRock(bc - bw/2 - 26 - h2*30, by, 26 + h2*22, band * 1.3);
+    if (h2 < 0.75) drawRock(bc + bw/2 + 26 + h1*30, by + 30, 24 + h1*20, band * 2.1);
+    // deeper bank rocks + ground speckles so the banks are not flat
+    var h3 = hash(band + 9100), h4 = hash(band + 3300);
+    if (h3 < 0.7) drawRock(bc - bw/2 - 110 - h4*70, by + 14, 20 + h4*18, band * 3.7);
+    if (h4 < 0.7) drawRock(bc + bw/2 + 110 + h3*70, by + 40, 20 + h3*18, band * 4.3);
+    for (var sp = 0; sp < 7; sp++){
+      var sh = hash(band * 31 + sp * 7);
+      ctx.fillStyle = sp % 2 ? 'rgba(46,110,74,0.5)' : 'rgba(16,44,32,0.55)';
+      ctx.beginPath(); ctx.arc(bc - bw/2 - 20 - sh * 190, by + sp * 13, 3 + sh * 5, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(bc + bw/2 + 20 + sh * 190, by + sp * 13 + 6, 3 + sh * 5, 0, Math.PI*2); ctx.fill();
+    }
     ctx.fillStyle = '#e77fb0';
     if (h1 < 0.6){ for (var f = 0; f < 4; f++){ ctx.beginPath(); ctx.arc(bc - bw/2 - 14 - ((h2*40 + f*9) % 46), by + f*8 - 12, 2.6, 0, Math.PI*2); ctx.fill(); } }
     if (h2 < 0.6){ for (var f2 = 0; f2 < 4; f2++){ ctx.beginPath(); ctx.arc(bc + bw/2 + 14 + ((h1*40 + f2*9) % 46), by + f2*8, 2.6, 0, Math.PI*2); ctx.fill(); } }
   }
   // lily pads
-  ctx.fillStyle = 'rgba(60,160,90,0.75)';
   for (i = 0; i < pads.length; i++){
     var py = screenY(pads[i].absY);
-    if (py > -30 && py < H + 30){ ctx.beginPath(); ctx.ellipse(pads[i].x, py, pads[i].r, pads[i].r*0.6, 0, 0, Math.PI*2); ctx.fill(); }
+    if (py > -40 && py < H + 40){
+      var ps = pads[i].r * 2.6;
+      if (ready(IMG.pad)) ctx.drawImage(IMG.pad, pads[i].x - ps/2, py - ps/2, ps, ps);
+      else { ctx.fillStyle = 'rgba(60,160,90,0.75)'; ctx.beginPath(); ctx.ellipse(pads[i].x, py, pads[i].r, pads[i].r*0.6, 0, 0, Math.PI*2); ctx.fill(); }
+    }
   }
   // stars
   for (i = 0; i < stars.length; i++){
     var st = stars[i], sty = screenY(st.absY);
     if (sty < -40 || sty > H + 40) continue;
     var pulse = 1 + Math.sin(performance.now()*0.005 + st.ph) * 0.12;
-    drawStarShape(st.x, sty, 15 * pulse, true);
+    var ss = 48 * pulse;
+    if (ready(IMG.star)){
+      ctx.save(); ctx.shadowColor = '#ffdf6b'; ctx.shadowBlur = 18;
+      ctx.drawImage(IMG.star, st.x - ss/2, sty - ss/2, ss, ss);
+      ctx.restore();
+    } else drawStarShape(st.x, sty, 15 * pulse, true);
   }
   // rocks in river
   for (i = 0; i < rocks.length; i++){
@@ -314,7 +345,8 @@ function draw(){
   ctx.fillStyle = '#123a9e'; ctx.fill(); ctx.strokeStyle = '#f2c230'; ctx.lineWidth = 3; ctx.stroke();
   ctx.fillStyle = '#fff'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('Stars: ' + starCount, hx + 14, hy + 29);
-  drawStarShape(hx + hw - 22, hy + 21, 11, false);
+  if (ready(IMG.star)) ctx.drawImage(IMG.star, hx + hw - 37, hy + 5, 32, 32);
+  else drawStarShape(hx + hw - 22, hy + 21, 11, false);
   ctx.textAlign = 'right'; ctx.font = '24px sans-serif';
   for (i = 0; i < 3; i++){
     ctx.globalAlpha = i < hp ? 1 : 0.25;
@@ -334,7 +366,9 @@ function draw(){
     ctx.fillStyle = '#dfe9ff'; ctx.font = '22px sans-serif';
     ctx.fillText('夜の川を紙の船で下りながら、落ちた星を拾おう', W/2, 320);
     ctx.fillText('岩に3回ぶつかるとゲームオーバー', W/2, 356);
-    drawStarShape(W/2 - 150, 238, 16, true); drawStarShape(W/2 + 150, 238, 16, true);
+    if (ready(IMG.star)){
+      ctx.drawImage(IMG.star, W/2 - 182, 206, 56, 56); ctx.drawImage(IMG.star, W/2 + 126, 206, 56, 56);
+    } else { drawStarShape(W/2 - 150, 238, 16, true); drawStarShape(W/2 + 150, 238, 16, true); }
     ctx.fillStyle = '#ffd94d'; ctx.font = 'bold 28px sans-serif';
     ctx.fillText('クリック / タップ / Enter でスタート', W/2, 450);
     ctx.fillStyle = '#aebfff'; ctx.font = '18px sans-serif';
